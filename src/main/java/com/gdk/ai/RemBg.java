@@ -20,10 +20,39 @@ public class RemBg {
     static final float[] MEAN = { 0.485f, 0.456f, 0.406f };
     static final float[] STD = { 0.229f, 0.224f, 0.225f };
 
-    public static void removeBg(String imagePath) throws Exception {
-        OrtEnvironment env = OrtEnvironment.getEnvironment();
-        OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
+    /**
+     * 移除背景。
+     *
+     * @param imagePath 图片路径
+     * @return 移除结果
+     * @throws Exception 失败异常
+     */
+    public static RemResult removeBackground(String imagePath) throws Exception {
+        return removeBackgroundOrForeground(imagePath, false);
+    }
+
+    /**
+     * 移除前景。
+     *
+     * @param imagePath 图片路径
+     * @return 移除结果
+     * @throws Exception 失败异常
+     */
+    public static RemResult removeForeground(String imagePath) throws Exception {
+        return removeBackgroundOrForeground(imagePath, true);
+    }
+
+    /**
+     * 移除背景或前景。
+     *
+     * @param imagePath 路径
+     * @param removeForeground 是否是移除前景
+     * @return 移除结果
+     * @throws Exception 失败异常
+     */
+    private static RemResult removeBackgroundOrForeground(String imagePath, boolean removeForeground) throws Exception {
         //模型下载地址：https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx
+        OrtSession session;
         try (InputStream is = RemBg.class.getClassLoader().getResourceAsStream("u2net.onnx")) {
             ByteArrayOutputStream buffer = new ByteArrayOutputStream();
             int nRead;
@@ -34,32 +63,34 @@ public class RemBg {
             buffer.flush();
             byte[] modelBytes = buffer.toByteArray();
 
-            OrtSession session = env.createSession(modelBytes, sessionOptions);
+            OrtEnvironment env = OrtEnvironment.getEnvironment();
+            OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
+            session = env.createSession(modelBytes, sessionOptions);
             // 解析模型输入参数元数据信息
             final String inputName = session.getInputNames().iterator().next();
             Map<String, NodeInfo> inputInfo = session.getInputInfo();
             NodeInfo inputNodeInfo = inputInfo.get(inputName);
             TensorInfo inputTensorInfo = (TensorInfo) inputNodeInfo.getInfo();
             // eg: FLOAT, UINT8 等
-            OnnxJavaType inputType = inputTensorInfo.type;
+            //OnnxJavaType inputType = inputTensorInfo.type;
             // eg: (1, 3, 320, 320)
             final long[] inputShape = inputTensorInfo.getShape();
-            final long inputNumElements = inputTensorInfo.getNumElements();
+            //final long inputNumElements = inputTensorInfo.getNumElements();
             // 模型要求的通道数、高、宽
-            final int channels = (int) inputShape[1];
-            final int netHeight = (int) inputShape[2];
+            //final int channels = (int) inputShape[1];
+            //final int netHeight = (int) inputShape[2];
             final int netWidth = (int) inputShape[3];
 
             final int modelSize = netWidth;
 
             // 解析模型输出参数元数据信息
-            final String outputName = session.getOutputNames().iterator().next();
-            Map<String, NodeInfo> outputInfo = session.getOutputInfo();
-            NodeInfo outputNodeInfo = outputInfo.get(outputName);
-            TensorInfo ouputTensorInfo = (TensorInfo) outputNodeInfo.getInfo();
-            OnnxJavaType outputType = ouputTensorInfo.type;
-            final long[] outputShape = ouputTensorInfo.getShape();
-            final long outputNumElements = ouputTensorInfo.getNumElements();
+            //final String outputName = session.getOutputNames().iterator().next();
+            //Map<String, NodeInfo> outputInfo = session.getOutputInfo();
+            //NodeInfo outputNodeInfo = outputInfo.get(outputName);
+            //TensorInfo ouputTensorInfo = (TensorInfo) outputNodeInfo.getInfo();
+            //OnnxJavaType outputType = ouputTensorInfo.type;
+            //final long[] outputShape = ouputTensorInfo.getShape();
+            //final long outputNumElements = ouputTensorInfo.getNumElements();
 
             // 使用 opencv 读取图像
             Mat srcImg = Imgcodecs.imread(imagePath);
@@ -72,8 +103,8 @@ public class RemBg {
             final float ratio = 1.0f * modelSize / Math.max(srcHeight, srcWidth);
             final int newHeight = (int)(srcHeight * ratio);
             final int newWidth = (int)(srcWidth * ratio);
-            //Imgproc.resize(srcImg, resized, new Size(newWidth, newHeight), 0, 0, Imgproc.INTER_LANCZOS4);
-            Imgproc.resize(srcImg, resized, new Size(newWidth, newHeight));
+            Imgproc.resize(srcImg, resized, new Size(newWidth, newHeight), 0, 0, Imgproc.INTER_LANCZOS4);
+            //Imgproc.resize(srcImg, resized, new Size(newWidth, newHeight));
             final int resizedWidth = resized.cols();
             final int resizedHeight = resized.rows();
             final boolean needFill = resizedWidth != modelSize || resizedHeight != modelSize;
@@ -103,35 +134,55 @@ public class RemBg {
                 float[][] maskData = outputData[0][0];
 
                 // 5. 后处理推理数据，获得蒙版
-                boolean removeForeground = false;
-                Mat resultMask = postProcessOutput(maskData, removeForeground);
-                Imgproc.cvtColor(resultMask, resultMask, Imgproc.COLOR_RGB2BGR);
+                Mat outputMask = postProcessOutput(maskData, removeForeground);
+                Imgproc.cvtColor(outputMask, outputMask, Imgproc.COLOR_RGB2BGR);
                 // 6. 还原蒙版尺寸到原始图像大小
                 if (needFill) {
                     Rect rect = new Rect(0, 0, resizedWidth, resizedHeight);
-                    resultMask = resultMask.submat(rect);
+                    outputMask = outputMask.submat(rect);
                 }
-                Mat resizedMask = new Mat();
-                //Imgproc.resize(resultMask, resizedMask, new Size(srcWidth, srcHeight), 0, 0, Imgproc.INTER_LANCZOS4);
-                Imgproc.resize(resultMask, resizedMask, new Size(srcWidth, srcHeight));
-                Imgcodecs.imwrite("output-mask.png", resizedMask);
 
-                // 应用遮罩层
-                if (resizedMask.type() != CvType.CV_8UC1) {
+                Mat resultMask = new Mat();
+                //Imgproc.resize(outputMask, resultMask, new Size(srcWidth, srcHeight), 0, 0, Imgproc.INTER_LANCZOS4);
+                Imgproc.resize(outputMask, resultMask, new Size(srcWidth, srcHeight));
+                if (resultMask.type() != CvType.CV_8UC1) {
                     Mat mask8u = new Mat();
-                    resizedMask.convertTo(mask8u, CvType.CV_8UC1);
-                    resizedMask = mask8u;
+                    resultMask.convertTo(mask8u, CvType.CV_8UC1);
+                    resultMask = mask8u;
                 }
 
-                Mat result = new Mat();
-                srcImg.copyTo(result, resizedMask);
+                // 创建一个支持透明度的四通道输出图像
+                Mat resultImage = new Mat(srcHeight, srcWidth, CvType.CV_8UC4);
+                // 遍历图像的每个像素
+                for (int y = 0; y < srcHeight; y++) {
+                    for (int x = 0; x < srcWidth; x++) {
+                        double[] originalPixel = srcImg.get(y, x);
+                        double[] maskPixel = resultMask.get(y, x);
+                        // 假设蒙版中白色区域为前景，黑色区域为背景
+                        // 白色为 255，黑色为 0
+                        double alpha = maskPixel[0] / 255.0;
+                        // 设置输出图像的像素
+                        double[] resultPixel = new double[] {
+                                originalPixel[0],
+                                originalPixel[1],
+                                originalPixel[2],
+                                alpha * 255
+                        };
+                        resultImage.put(y, x, resultPixel);
+                    }
+                }
 
+                //Mat result = new Mat();
+                //Core.bitwise_and(srcImg, resizedMask, result);
                 // 可以使用 applyMaskWithBgColor() 改变背景颜色
                 //result = applyMaskWithBgColor(result, resizedMask, new Scalar(255,255,0));
-                Imgcodecs.imwrite("output.png", result);
-            }
 
-            session.close();
+                return new RemResult(resultMask, resultImage);
+            } finally {
+                if (session != null) {
+                    session.close();
+                }
+            }
         }
     }
 
